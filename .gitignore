@@ -1,0 +1,7 @@
+.env
+audit_log.txt
+__pycache__/
+*.pyc
+demo/*.db
+.venv/
+venv/

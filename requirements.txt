@@ -1,0 +1,18 @@
+langchain>=1.0
+langchain-openai
+sqlalchemy>=2.0
+sqlglot
+streamlit
+pandas
+python-dotenv
+
+# Add the ONE line for your database:
+# psycopg2-binary       # PostgreSQL
+# pymysql               # MySQL / MariaDB
+# pyodbc                # SQL Server
+# oracledb              # Oracle
+
+# Add the ONE line for your model (OpenAI and Azure OpenAI need nothing extra):
+# langchain-anthropic   # Claude
+# langchain-aws         # AWS Bedrock
+# langchain-groq        # Groq
