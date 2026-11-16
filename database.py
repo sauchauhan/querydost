@@ -22,13 +22,15 @@
 # what a query really does instead of just looking at its first word.
 # ============================================================
 
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 
 import sqlglot
 from sqlglot import exp
-from sqlalchemy import create_engine, inspect, text, MetaData, Table, select
+from sqlalchemy import create_engine, inspect, text, select
+from sqlalchemy import table as sa_table, column as sa_column
 from sqlalchemy.engine import make_url
 from sqlalchemy.pool import NullPool
 
@@ -247,13 +249,21 @@ def describe_table(full_name):
         key_columns = inspector.get_pk_constraint(name, schema=schema).get("constrained_columns") or []
     except Exception:
         pass
+    # SQLAlchemy can silently SKIP columns with a custom type (e.g. AdventureWorks "Name").
+    # So we also ask the database's own catalog, which lists EVERY column, and merge.
     columns = inspector.get_columns(name, schema=schema)
+    catalog = get_catalog_columns(schema, name, inspector.default_schema_name)
+    columns = merge_columns(columns, catalog)
+    column_names = []
     for c in range(len(columns)):
         column = columns[c]
+        column_names.append(column["name"])
         try:
             type_text = str(column["type"])
         except Exception:
-            type_text = "UNKNOWN"
+            type_text = "NULL"
+        if type_text == "NULL":
+            type_text = catalog_type(catalog, column["name"])
         line = "  - " + column["name"] + " " + type_text
         if column["name"] in key_columns:
             line = line + "  PRIMARY KEY"
@@ -278,15 +288,25 @@ def describe_table(full_name):
                          + other_table + "." + fk["referred_columns"][k])
 
     # ---- sample rows ----
-    # select(table).limit(n) → SQLAlchemy writes LIMIT or TOP for us, whatever the database
+    # sa_table / sa_column → describe the table by NAME only (no reading of types),
+    # so custom-type columns are included and SQLAlchemy still writes LIMIT or TOP for us.
+    # Binary / XML / spatial columns are skipped: no use to the model, and some drivers cannot read them.
     if settings.SAMPLE_ROWS > 0:
         try:
-            table = Table(name, MetaData(), schema=schema, autoload_with=engine)
+            sample_columns = []
+            for c in range(len(column_names)):
+                if catalog_type(catalog, column_names[c]) not in SKIP_IN_SAMPLES:
+                    sample_columns.append(sa_column(column_names[c]))
+            sample_table = sa_table(name, *sample_columns, schema=schema)
             with engine.connect() as conn:
-                rows = conn.execute(select(table).limit(settings.SAMPLE_ROWS)).fetchall()
+                rows = conn.execute(select(*sample_columns).select_from(sample_table)
+                                    .limit(settings.SAMPLE_ROWS)).fetchall()
                 conn.rollback()
+            sampled_names = []
+            for c in range(len(sample_columns)):
+                sampled_names.append(sample_columns[c].name)
             if len(rows) > 0:
-                lines.append("Sample rows:")
+                lines.append("Sample rows (" + ", ".join(sampled_names) + "):")
             for r in range(len(rows)):
                 values = []
                 for v in range(len(rows[r])):
@@ -298,6 +318,54 @@ def describe_table(full_name):
     result = "\n".join(lines)
     CACHE[cache_key] = result
     return result
+
+
+# INFORMATION_SCHEMA.COLUMNS → a standard view (SQL Server, PostgreSQL, MySQL) listing
+# EVERY column in order, with its BASE type (e.g. nvarchar for a custom "Name" type).
+# SQLite does not have it, so there we simply get an empty list.
+def get_catalog_columns(schema, name, default_schema):
+    found = []
+    sql = ("SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+           "WHERE TABLE_NAME = :table_name AND TABLE_SCHEMA = :schema_name ORDER BY ORDINAL_POSITION")
+    try:
+        with get_engine(for_agent=True).connect() as conn:
+            rows = conn.execute(text(sql), {"table_name": name,
+                                            "schema_name": schema or default_schema}).fetchall()
+            conn.rollback()
+        for r in range(len(rows)):
+            found.append({"name": str(rows[r][0]), "type": str(rows[r][1]).upper()})
+    except Exception:
+        pass
+    return found
+
+
+SKIP_IN_SAMPLES = ["XML", "GEOGRAPHY", "GEOMETRY", "HIERARCHYID", "VARBINARY", "BINARY",
+                   "IMAGE", "TIMESTAMP", "ROWVERSION", "BYTEA", "BLOB", "LONGBLOB"]
+
+
+def catalog_type(catalog, column_name):
+    for i in range(len(catalog)):
+        if catalog[i]["name"] == column_name:
+            return catalog[i]["type"]
+    return "CUSTOM TYPE"
+
+
+# Keep the database's column ORDER, use SQLAlchemy's details where it has them,
+# and add back every column SQLAlchemy skipped.
+def merge_columns(inspected, catalog):
+    if len(catalog) == 0:
+        return inspected
+    by_name = {}
+    for i in range(len(inspected)):
+        by_name[inspected[i]["name"]] = inspected[i]
+    merged = []
+    for i in range(len(catalog)):
+        column_name = catalog[i]["name"]
+        if column_name in by_name:
+            merged.append(by_name[column_name])
+        else:
+            merged.append({"name": column_name, "type": catalog[i]["type"], "comment": None})
+    return merged
 
 
 # "full" or "lookup" (see SCHEMA_MODE in .env)
@@ -351,13 +419,22 @@ def parse_one_statement(sql):
     return real_statements
 
 
-# Backup check, used only if sqlglot cannot read this SQL
+# Backup check, used only if sqlglot cannot read this SQL.
+# It is stricter on purpose: any data-changing word anywhere blocks the query.
+# re.search(r"\bDELETE\b", ...) → finds DELETE as a whole word (not inside "deleted_at")
+WRITE_WORDS = ["INSERT", "UPDATE", "DELETE", "MERGE", "DROP", "ALTER", "TRUNCATE",
+               "CREATE", "GRANT", "REVOKE", "EXEC", "EXECUTE", "INTO", "CALL"]
+
+
 def simple_read_check(cleaned):
     if ";" in cleaned:
         return "Only ONE SQL statement is allowed at a time"
     first_word = cleaned.split()[0].upper()
     if first_word != "SELECT" and first_word != "WITH":
         return "Only SELECT queries are allowed. Got: " + first_word
+    for i in range(len(WRITE_WORDS)):
+        if re.search(r"\b" + WRITE_WORDS[i] + r"\b", cleaned.upper()):
+            return "The query contains " + WRITE_WORDS[i] + ", which is not allowed"
     return ""
 
 
@@ -368,7 +445,8 @@ def check_read_sql(sql):
 
     try:
         statements = parse_one_statement(cleaned)
-    except Exception:
+    except Exception as error:
+        write_audit("sqlglot could not read query, using backup check", cleaned, str(error).split("\n")[0])
         return simple_read_check(cleaned)
 
     if len(statements) != 1:

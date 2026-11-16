@@ -58,6 +58,7 @@ RULES:
 - Always get numbers by running SQL with the run_sql_query tool. Never guess or invent data.
 - Use table names exactly as written above, including the schema part (for example sales.customer).
 - Only use columns you have actually seen. Never guess a column name.
+- Every column listed holds data, whatever its type. Prefer names (e.g. a Name column) over IDs in answers.
 - Run ONE query at a time, and only the queries needed for the user's exact question.
 - Answer ONLY from the result whose "RESULT OF QUERY" matches the question. Check "Rows returned".
 - If a result says only the first rows are shown, say the list is cut off. Use COUNT(*) for totals.
