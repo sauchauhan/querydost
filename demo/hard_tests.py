@@ -69,7 +69,6 @@ TESTS = [
         FROM sales s
         JOIN quota q ON s.SalesPersonID = q.BusinessEntityID
         JOIN Person.Person p ON p.BusinessEntityID = s.SalesPersonID
-        WHERE s.Sales2013 > q.Quota2013
         ORDER BY AttainmentPct DESC"""),
 
     ("H5", "For orders shipped to the United Kingdom, what is the average number of days between order date "
@@ -109,6 +108,10 @@ for i in range(len(TESTS)):
     cursor.execute(TESTS[i][2])
     rows = cursor.fetchall()
     print(test_id + ": " + question)
+    if test_id == "H4":
+        print("      (ALL salespeople shown. Beat quota = AttainmentPct above 100.)")
+    if len(rows) == 0:
+        print("      (no rows: the correct answer is 'none')")
     for r in range(len(rows)):
         print("     ", tuple(rows[r]))
     print()
