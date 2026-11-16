@@ -51,6 +51,30 @@ Change **one line** in `.env`:
 | AWS Bedrock | `bedrock_converse:<model id>` | your AWS login |
 | Groq | `groq:llama-3.3-70b-versatile` | `GROQ_API_KEY` |
 
+## Try it on a real enterprise database (AdventureWorks, 91 tables)
+
+Microsoft's AdventureWorks sample runs in Docker. You need Docker Desktop, `pip install pyodbc`
+and [ODBC Driver 18 for SQL Server](https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server).
+
+```bash
+docker run -d --name adventureworks -p 1433:1433 -e "ACCEPT_EULA=Y" -e "MSSQL_SA_PASSWORD=QueryDost#2026" chriseaton/adventureworks:latest
+python demo/setup_adventureworks.py     # creates a READ-ONLY login + prints an answer key
+python demo/hard_tests.py               # answer key for 6 hard questions
+```
+
+Then in `.env`:
+
+```
+DATABASE_URL=mssql+pyodbc://querydost_reader:QdReader2026@localhost:1433/AdventureWorks?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes
+```
+
+The hard questions cover top-1-per-group rankings, year-over-year growth, "did X but not Y",
+comparing sales against quotas, a 5-table join to filter by country, and "most recent" rows in
+history tables. Ask them in the app and compare with the answer key.
+
+In our own test (one run, GPT-6.1 Sol, no `knowledge.md`) QueryDost answered **6 of 6 basic and
+6 of 6 hard questions** correctly. That is a smoke test, not a benchmark: try it yourself.
+
 ## Make answers accurate: `knowledge.md`
 
 The model knows SQL. It does not know what *your* company means by "active customer" or "quarter".
@@ -114,6 +138,7 @@ without WHERE are always refused.
 | `database.py` | Connections, table discovery, safety checks, audit log | No |
 | `settings.py` | Reads `.env` and fills in safe defaults | No |
 | `demo/create_demo_db.py` | Creates or resets the demo HR database | No |
+| `demo/setup_adventureworks.py`, `demo/hard_tests.py` | AdventureWorks read-only login and answer keys | No |
 
 ## Limits (honest list)
 
