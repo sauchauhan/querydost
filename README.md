@@ -4,9 +4,9 @@ Ask your database questions in plain English. QueryDost writes the SQL, runs it 
 and answers in plain English. Every query it ran is shown under the answer, with the real rows,
 so you can check it.
 
-- **Any database:** SQLite, PostgreSQL, MySQL, SQL Server, Oracle (anything SQLAlchemy supports)
+- **Any database:** SQL Server, PostgreSQL, MySQL, Oracle, Snowflake, SQLite (anything SQLAlchemy supports)
 - **Any model, including your company's approved one:** Azure OpenAI, OpenAI, Claude, AWS Bedrock, Groq
-- **No code to edit:** one `.env` file for the connection, one `knowledge.md` file for your business terms
+- **No code to edit:** a connection screen with a Test button, and one `knowledge.md` file for your business terms
 - **Safe by default:** read-only, every query parsed and checked, every read rolled back, everything logged
 
 *Dost* means *friend* in Hindi.
@@ -16,32 +16,34 @@ so you can check it.
 ```bash
 pip install -r requirements.txt
 python demo/create_demo_db.py
-cp .env.example .env          # Windows: copy .env.example .env
-```
-
-Open `.env`, put your key in `OPENAI_API_KEY=`, then:
-
-```bash
 streamlit run app.py
 ```
 
-It opens at http://localhost:8501. Try: *"Which department has the most people?"* or
-*"Who has pending leave and how many leave days do they have left?"*
+It opens at http://localhost:8501. The first time, a **connection screen** asks for your AI model key.
+Paste it, click **Test model**, then **Save and start**. Try: *"Which department has the most people?"*
 
-## Connect your own database
+## Connect your own database: no URLs, no config files
 
-Change **one line** in `.env`:
+Click **⚙️ Change database or model** in the sidebar and fill in the boxes:
 
-```
-DATABASE_URL=postgresql+psycopg2://readonly_user:password@localhost:5432/mydb
-```
+1. Pick the database type (SQL Server, PostgreSQL, MySQL, Oracle, Snowflake, SQLite)
+2. Server, database name, username, password (any characters, even `@ # / :`)
+3. Optional: schemas to show, a role, Windows login for SQL Server
+4. Click **Test connection**. You get a plain-English answer, for example
+   *"Connected. Found 91 tables and views"* or *"The server did not answer. Check the host and port,
+   that the database is running, and that you are on the company VPN if it needs one."*
+5. Click **Save and start**
 
-Install the driver for your database (listed in `requirements.txt`), restart the app. QueryDost finds
-the tables, columns, keys and joins by itself. Examples for MySQL, SQL Server and Oracle are in `.env.example`.
+QueryDost saves everything to its own `.env` file. Prefer editing files? Every setting is explained in
+`.env.example`, and advanced users can still give a single `DATABASE_URL`.
+
+Install the driver for your database: `psycopg2-binary` (PostgreSQL), `pymysql` (MySQL), `pyodbc` plus
+Microsoft's ODBC Driver 18 (SQL Server), `oracledb` (Oracle), `snowflake-sqlalchemy` (Snowflake).
+The connection screen tells you if one is missing.
 
 ## Use your company's model
 
-Change **one line** in `.env`:
+Pick it on the connection screen, or set **one line** in `.env`:
 
 | Model | `LLM_MODEL=` | Also set |
 |---|---|---|
@@ -62,11 +64,8 @@ python demo/setup_adventureworks.py     # creates a READ-ONLY login + prints an 
 python demo/hard_tests.py               # answer key for 6 hard questions
 ```
 
-Then in `.env`:
-
-```
-DATABASE_URL=mssql+pyodbc://querydost_reader:QdReader2026@localhost:1433/AdventureWorks?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes
-```
+Then on the connection screen: **SQL Server**, server `localhost`, database `AdventureWorks`,
+username `querydost_reader`, password `QdReader2026`.
 
 The hard questions cover top-1-per-group rankings, year-over-year growth, "did X but not Y",
 comparing sales against quotas, a 5-table join to filter by country, and "most recent" rows in
@@ -114,7 +113,7 @@ database permission. That is why layer 1 matters most.
 ### Data changes (off by default)
 
 Set `ALLOW_DB_CHANGES=true` and the agent can **propose** an INSERT or UPDATE. Nothing runs until a human
-clicks **Approve** in the app, and then it runs with a **separate** login (`APPROVER_DATABASE_URL`),
+clicks **Approve** in the app, and then it runs with a **separate** login (`APPROVER_DB_USER` / `APPROVER_DB_PASSWORD` in `.env`),
 never the agent's. There is no setting to skip approval. DROP, ALTER, TRUNCATE and UPDATE/DELETE
 without WHERE are always refused.
 
@@ -131,12 +130,14 @@ without WHERE are always refused.
 
 | File | What it is | Edit it? |
 |---|---|---|
-| `.env` | Database, model, keys, switches | **Yes** |
+| `.env` | Database, model, keys, switches (the connection screen writes it for you) | Optional |
 | `knowledge.md` | Your business terms, example SQL, rules | **Yes** |
 | `app.py` | The chat screen (Streamlit) | No |
 | `agent.py` | The model, the tools and the prompt (LangChain `create_agent`) | No |
 | `database.py` | Connections, table discovery, safety checks, audit log | No |
 | `settings.py` | Reads `.env` and fills in safe defaults | No |
+| `connection.py` | Builds the connection URL from plain fields, explains connection errors | No |
+| `setup_page.py` | The connection screen | No |
 | `demo/create_demo_db.py` | Creates or resets the demo HR database | No |
 | `demo/setup_adventureworks.py`, `demo/hard_tests.py` | AdventureWorks read-only login and answer keys | No |
 

@@ -29,11 +29,12 @@ from pathlib import Path
 
 import sqlglot
 from sqlglot import exp
-from sqlalchemy import create_engine, inspect, text, select
+from sqlalchemy import create_engine, inspect, text, select, event
 from sqlalchemy import table as sa_table, column as sa_column
 from sqlalchemy.engine import make_url
 from sqlalchemy.pool import NullPool
 
+import connection
 import settings
 
 
@@ -58,6 +59,62 @@ def make_sqlite_engine(file_path, read_only):
     return create_engine("sqlite://", creator=connect, poolclass=NullPool)
 
 
+# ------------------------------------------------------------
+# SCHEMA AND ROLE: run once on every new connection
+#   PostgreSQL → SET search_path (default schema) and SET ROLE
+#   Oracle     → ALTER SESSION SET CURRENT_SCHEMA
+#   SQL Server / MySQL → the login's default schema / the database name decides
+#   Snowflake  → role and schema are already in the URL
+# Names are checked first: letters, digits, _ and $ only, so nothing can be injected.
+# ------------------------------------------------------------
+def is_safe_name(name):
+    return re.match(r"^[A-Za-z0-9_$]+$", name) is not None
+
+
+def session_setup_commands(backend, schemas, role):
+    names = list(schemas) + [role]
+    for i in range(len(names)):
+        if names[i] != "" and not is_safe_name(names[i]):
+            raise ValueError("Schema or role name '" + names[i] + "' has unusual characters. "
+                             "Use letters, digits and _ only.")
+    commands = []
+    if backend == "postgresql":
+        if len(schemas) > 0:
+            commands.append("SET search_path TO " + ", ".join(schemas) + ", public")
+        if role != "":
+            commands.append("SET ROLE " + role)
+    if backend == "oracle" and len(schemas) > 0:
+        commands.append("ALTER SESSION SET CURRENT_SCHEMA = " + schemas[0])
+    return commands
+
+
+# event.listens_for(engine, "connect") → "run this function every time a NEW connection opens"
+# dbapi_connection.commit() → save the SET, or the next rollback would undo it
+# schemas / role default to the saved settings; the connection screen passes its own
+def add_session_setup(engine, schemas=None, role=None):
+    if schemas is None:
+        schemas = settings.SCHEMAS
+    if role is None:
+        role = settings.DB_ROLE
+    commands = session_setup_commands(engine.dialect.name, schemas, role)
+    if len(commands) == 0:
+        return
+
+    @event.listens_for(engine, "connect")
+    def on_connect(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        for i in range(len(commands)):
+            cursor.execute(commands[i])
+        cursor.close()
+        dbapi_connection.commit()
+
+
+# Forget every engine and cached description (after the connection settings change)
+def reset():
+    ENGINES.clear()
+    CACHE.clear()
+
+
 # for_agent=True  → the agent's login (DATABASE_URL). Used for every question.
 # for_agent=False → the approver's login. Used ONLY after a human clicked Approve.
 def get_engine(for_agent):
@@ -76,8 +133,54 @@ def get_engine(for_agent):
                              "Ask your DBA for a separate login that may write, and add it.")
         engine = create_engine(settings.APPROVER_DATABASE_URL, pool_pre_ping=True)
 
+    add_session_setup(engine)
     ENGINES[key] = engine
     return engine
+
+
+# ------------------------------------------------------------
+# TEST A CONNECTION (used by the connection screen)
+# Returns {"ok": True/False, "message": "...", "tables": number}
+# Opens its OWN short-lived connection, so nothing is cached or changed.
+# ------------------------------------------------------------
+def test_connection(url, db_type, schemas, role):
+    result = {"ok": False, "message": "", "tables": 0}
+    try:
+        parsed = make_url(url)
+        if parsed.get_backend_name() == "sqlite":
+            if not Path(parsed.database).exists():
+                result["message"] = "The SQLite file was not found: " + str(parsed.database)
+                return result
+            engine = make_sqlite_engine(parsed.database, read_only=True)
+        else:
+            engine = create_engine(url, poolclass=NullPool)
+        add_session_setup(engine, schemas, role)
+        with engine.connect() as conn:
+            inspector = inspect(conn)
+            if len(schemas) == 0:
+                schemas = []
+                all_schemas = inspector.get_schema_names()
+                for i in range(len(all_schemas)):
+                    if not is_system_schema(all_schemas[i]):
+                        schemas.append(all_schemas[i])
+            count = 0
+            for s in range(len(schemas)):
+                try:
+                    count = count + len(inspector.get_table_names(schema=schemas[s]))
+                    count = count + len(inspector.get_view_names(schema=schemas[s]))
+                except Exception:
+                    pass
+        engine.dispose()
+        result["ok"] = True
+        result["tables"] = count
+        result["message"] = "Connected. Found " + str(count) + " tables and views."
+        if count == 0:
+            result["message"] = ("Connected, but this login can see 0 tables. Ask your DBA to grant "
+                                 "SELECT on the tables or views you need, or check the Schemas field.")
+    except Exception as error:
+        result["message"] = connection.friendly_error(db_type, error)
+        result["details"] = str(error)
+    return result
 
 
 # The URL with the password hidden, safe to show on screen

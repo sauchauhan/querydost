@@ -12,14 +12,24 @@
 
 import os
 from pathlib import Path
-from dotenv import load_dotenv, find_dotenv
+from dotenv import load_dotenv
 
-# load_dotenv(find_dotenv()) → finds .env (in this folder or any parent folder)
-#                              and loads every line in it as a setting
-load_dotenv(find_dotenv())
+import connection
 
 # APP_FOLDER → the folder this file sits in, wherever you copy QueryDost
 APP_FOLDER = Path(__file__).parent
+
+# ENV_FILE → QueryDost's OWN .env. The connection screen saves here.
+ENV_FILE = APP_FOLDER / ".env"
+
+# Load QueryDost's own .env first, then any .env in parent folders.
+# override=False → a value already loaded is never replaced, so QueryDost's own
+#                  .env wins, and a parent .env only fills in what is missing
+#                  (handy: your OPENAI_API_KEY can live in one shared .env).
+load_dotenv(ENV_FILE, override=False)
+for parent in APP_FOLDER.parents:
+    if (parent / ".env").exists():
+        load_dotenv(parent / ".env", override=False)
 
 
 # ------------------------------------------------------------
@@ -71,11 +81,45 @@ def fix_sqlite_path(url):
 # ============================================================
 # 1. THE DATABASE
 # ============================================================
-# DATABASE_URL → one line that says which database, where, and which login.
-#                The login should be a READ-ONLY user. See README.
-DATABASE_URL = fix_sqlite_path(read_text("DATABASE_URL", "sqlite:///demo/hr_company.db"))
+# Two ways to say which database (the connection screen in the app fills these in):
+#
+#   EASY: plain fields              ADVANCED: one URL
+#     DB_TYPE=sqlserver               DATABASE_URL=mssql+pyodbc://...
+#     DB_HOST=server01
+#     DB_NAME=SalesDW
+#     DB_USER=readonly_user
+#     DB_PASSWORD=any#special@chars
+#
+# DATABASE_URL wins if both are set. Neither set → the demo HR database.
+# The login should be a READ-ONLY user. See README.
+DB_PARTS = {
+    "type": read_text("DB_TYPE", "").lower(),
+    "file": read_text("DB_FILE", ""),
+    "host": read_text("DB_HOST", ""),
+    "port": read_text("DB_PORT", ""),
+    "name": read_text("DB_NAME", ""),
+    "user": read_text("DB_USER", ""),
+    "password": read_text("DB_PASSWORD", ""),
+    "role": read_text("DB_ROLE", ""),
+    "windows_login": read_true_false("DB_WINDOWS_LOGIN", False),
+    "odbc_driver": read_text("DB_ODBC_DRIVER", ""),
+    "warehouse": read_text("DB_WAREHOUSE", ""),
+    "schema": read_text("SCHEMAS", ""),
+}
 
-# SCHEMAS        → only look inside these schemas (blank = all user schemas)
+DATABASE_URL = read_text("DATABASE_URL", "")
+if DATABASE_URL == "" and DB_PARTS["type"] != "":
+    DATABASE_URL = connection.build_url(DB_PARTS)
+if DATABASE_URL == "":
+    DATABASE_URL = "sqlite:///demo/hr_company.db"
+DATABASE_URL = fix_sqlite_path(DATABASE_URL)
+
+# DB_ROLE → a database role to switch to after logging in (PostgreSQL: SET ROLE).
+#           Snowflake puts it in the URL instead. Blank = the login's default role.
+DB_ROLE = DB_PARTS["role"]
+
+# SCHEMAS        → only look inside these schemas (blank = all user schemas).
+#                  PostgreSQL and Oracle also use the first one as the default schema.
 # ALLOWED_TABLES → only these tables / views (blank = everything the login can see)
 SCHEMAS = read_list("SCHEMAS")
 ALLOWED_TABLES = read_list("ALLOWED_TABLES")
@@ -141,7 +185,16 @@ if len(ALLOWED_CHANGE_TYPES) == 0:
     ALLOWED_CHANGE_TYPES = ["INSERT", "UPDATE"]
 for i in range(len(ALLOWED_CHANGE_TYPES)):
     ALLOWED_CHANGE_TYPES[i] = ALLOWED_CHANGE_TYPES[i].upper()
-APPROVER_DATABASE_URL = fix_sqlite_path(read_text("APPROVER_DATABASE_URL", ""))
+# Easy way: APPROVER_DB_USER + APPROVER_DB_PASSWORD, same server and database as above
+APPROVER_DATABASE_URL = read_text("APPROVER_DATABASE_URL", "")
+if APPROVER_DATABASE_URL == "" and DB_PARTS["type"] not in ["", "sqlite"]:
+    if read_text("APPROVER_DB_USER", "") != "":
+        approver_parts = dict(DB_PARTS)
+        approver_parts["user"] = read_text("APPROVER_DB_USER", "")
+        approver_parts["password"] = read_text("APPROVER_DB_PASSWORD", "")
+        approver_parts["windows_login"] = False
+        APPROVER_DATABASE_URL = connection.build_url(approver_parts)
+APPROVER_DATABASE_URL = fix_sqlite_path(APPROVER_DATABASE_URL)
 
 
 # ============================================================

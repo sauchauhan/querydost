@@ -30,18 +30,22 @@ import settings
 # ============================================================
 # init_chat_model("provider:model") → one line works for OpenAI, Azure OpenAI,
 # Anthropic (Claude), AWS Bedrock, Groq, Google and more. You choose in .env.
-def build_llm():
+# model_name → used by the connection screen to test a model before saving it.
+#              Normally empty, which means "use LLM_MODEL from .env".
+def build_llm(model_name=""):
+    if model_name == "":
+        model_name = settings.LLM_MODEL
     options = {}
     if settings.LLM_TEMPERATURE != "":
         options["temperature"] = float(settings.LLM_TEMPERATURE)
     # Newer OpenAI models (GPT-5 and later) only allow tools on the newer
     # "Responses" API, so we use it for OpenAI. Turn off with OPENAI_RESPONSES_API=false
-    if settings.LLM_MODEL.startswith("openai:") and settings.OPENAI_RESPONSES_API:
+    if model_name.startswith("openai:") and settings.OPENAI_RESPONSES_API:
         options["use_responses_api"] = True
     # Azure calls the model by your DEPLOYMENT name, so we pass it through
-    if settings.LLM_MODEL.startswith("azure_openai:"):
-        options["azure_deployment"] = settings.LLM_MODEL.split(":", 1)[1]
-    return init_chat_model(settings.LLM_MODEL, **options)
+    if model_name.startswith("azure_openai:"):
+        options["azure_deployment"] = model_name.split(":", 1)[1]
+    return init_chat_model(model_name, **options)
 
 
 # ============================================================

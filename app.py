@@ -17,8 +17,10 @@ import pandas as pd
 import streamlit as st
 
 import agent
+import connection
 import database
 import settings
+import setup_page
 
 st.set_page_config(page_title="QueryDost", page_icon="🗄️", layout="wide")
 
@@ -39,8 +41,26 @@ if "pending" not in st.session_state:
 
 
 # ------------------------------------------------------------
-# Connect and build the agent once per tab. If the database cannot be
-# reached, say so clearly instead of showing a long Python error.
+# THE CONNECTION SCREEN (setup_page.py) is shown instead of the chat when:
+#   - you clicked "Change database or model" in the sidebar
+#   - this is the first run and no API key is set yet
+#   - the database or model could not be started
+# st.stop() → stop drawing here, so only the connection screen is shown
+# ------------------------------------------------------------
+if "show_setup" not in st.session_state:
+    st.session_state.show_setup = setup_page.model_key_missing()
+    st.session_state.setup_reason = ""
+    if st.session_state.show_setup:
+        st.session_state.setup_reason = "Welcome! Add your AI model key to get started (the demo database is ready)."
+
+if st.session_state.show_setup:
+    setup_page.show(st.session_state.get("setup_reason", ""), st.session_state.get("setup_details", ""))
+    st.stop()
+
+
+# ------------------------------------------------------------
+# Connect and build the agent once per tab. If it fails, explain in plain
+# English and open the connection screen instead of showing a long Python error.
 # ------------------------------------------------------------
 if "agent" not in st.session_state:
     try:
@@ -48,10 +68,12 @@ if "agent" not in st.session_state:
             st.session_state.tables = database.list_tables()
             st.session_state.agent = agent.build_agent(st.session_state.notes)
     except Exception as error:
-        st.error("Could not start QueryDost.\n\n**Database:** " + database.get_safe_url()
-                 + "\n\n**Model:** " + settings.LLM_MODEL + "\n\n**Problem:** " + str(error))
-        st.info("Check DATABASE_URL, LLM_MODEL and your API key in the .env file, then refresh this page.")
-        st.stop()
+        st.session_state.show_setup = True
+        st.session_state.setup_can_cancel = False
+        st.session_state.setup_reason = ("QueryDost could not start. "
+                                         + connection.friendly_error(settings.DB_PARTS["type"], error))
+        st.session_state.setup_details = str(error)
+        st.rerun()
 
 
 # ============================================================
@@ -82,6 +104,13 @@ else:
 
 st.sidebar.write("Python SQL check: " + ("✅ on" if settings.CHECK_SQL_IN_CODE else "❌ off"))
 st.sidebar.write("Max rows per query: " + str(settings.MAX_ROWS))
+
+# Open the connection screen
+if st.sidebar.button("⚙️ Change database or model"):
+    st.session_state.show_setup = True
+    st.session_state.setup_can_cancel = True
+    st.session_state.setup_reason = ""
+    st.rerun()
 
 # Reload after editing knowledge.md or changing the database structure
 if st.sidebar.button("🔄 Reload knowledge.md and tables"):
