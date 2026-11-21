@@ -151,14 +151,21 @@ def show(reason="", details=""):
 def show_database_section():
     st.header("1. Your database")
     if settings.DB_PARTS["type"] == "" and not settings.DATABASE_URL.startswith("sqlite"):
-        st.info("You are using a DATABASE_URL from .env. Saving here will use these boxes instead.")
+        st.info("You are using a DATABASE_URL from .env. The boxes below are filled in from it. "
+                "Saving here switches to the boxes.")
+
+    # Pre-fill the boxes: from the plain fields if set, otherwise from the DATABASE_URL
+    current = settings.DB_PARTS
+    if current["type"] == "":
+        current = connection.parts_from_url(settings.DATABASE_URL)
+        if current["schema"] == "":
+            current["schema"] = settings.DB_PARTS["schema"]
 
     type_keys = list(connection.DB_TYPES)
-    current_type = settings.DB_PARTS["type"] if settings.DB_PARTS["type"] in type_keys else "sqlite"
+    current_type = current["type"] if current["type"] in type_keys else "sqlite"
     db_type = st.selectbox("Database type", type_keys, index=type_keys.index(current_type),
                            format_func=lambda key: connection.DB_TYPES[key]["label"])
     info = connection.DB_TYPES[db_type]
-    current = settings.DB_PARTS
     parts = {"type": db_type}
 
     if db_type == "sqlite":

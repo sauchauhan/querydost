@@ -164,3 +164,43 @@ def friendly_error(db_type, error):
             if phrases[p] in lower:
                 return ERROR_HINTS[i][1]
     return "Could not connect: " + text.split("\n")[0][:300]
+
+
+# ------------------------------------------------------------
+# parts_from_url(url) → the reverse of build_url: split an existing URL into
+# the plain fields, so the connection screen can show them pre-filled.
+# make_url → SQLAlchemy reads the URL and un-escapes the password for us
+# ------------------------------------------------------------
+BACKEND_TO_TYPE = {"sqlite": "sqlite", "postgresql": "postgres", "mysql": "mysql", "mariadb": "mysql",
+                   "mssql": "sqlserver", "oracle": "oracle", "snowflake": "snowflake"}
+
+
+def parts_from_url(url):
+    parts = {"type": "", "file": "", "host": "", "port": "", "name": "", "user": "", "password": "",
+             "role": "", "windows_login": False, "odbc_driver": "", "warehouse": "", "schema": ""}
+    try:
+        from sqlalchemy.engine import make_url
+        parsed = make_url(url)
+    except Exception:
+        return parts
+    parts["type"] = BACKEND_TO_TYPE.get(parsed.get_backend_name(), "")
+    if parts["type"] == "sqlite":
+        parts["file"] = parsed.database or ""
+        return parts
+    parts["host"] = parsed.host or ""
+    parts["port"] = str(parsed.port) if parsed.port else ""
+    parts["name"] = parsed.database or ""
+    parts["user"] = parsed.username or ""
+    parts["password"] = parsed.password or ""
+    query = dict(parsed.query)
+    parts["odbc_driver"] = str(query.get("driver", ""))
+    parts["windows_login"] = str(query.get("Trusted_Connection", "")).lower() == "yes"
+    parts["role"] = str(query.get("role", ""))
+    parts["warehouse"] = str(query.get("warehouse", ""))
+    if parts["type"] == "oracle":
+        parts["name"] = str(query.get("service_name", parts["name"]))
+    if parts["type"] == "snowflake" and "/" in parts["name"]:
+        pieces = parts["name"].split("/", 1)
+        parts["name"] = pieces[0]
+        parts["schema"] = pieces[1]
+    return parts

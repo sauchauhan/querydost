@@ -71,6 +71,10 @@ The hard questions cover top-1-per-group rankings, year-over-year growth, "did X
 comparing sales against quotas, a 5-table join to filter by country, and "most recent" rows in
 history tables. Ask them in the app and compare with the answer key.
 
+**After every container restart,** run `python demo/setup_adventureworks.py` again. The image restores
+AdventureWorks fresh on each start, which removes the read-only user from the database. Without this
+step the connection screen says the login "cannot open that database".
+
 In our own test (one run, GPT-6.1 Sol, no `knowledge.md`) QueryDost answered **6 of 6 basic and
 6 of 6 hard questions** correctly. That is a smoke test, not a benchmark: try it yourself.
 
